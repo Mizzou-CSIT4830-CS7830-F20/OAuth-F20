@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>Web Sockets</title>
+        <meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		
+		<meta name="google-signin-scope" content="profile email">
+       	<meta name="google-signin-client_id" content="YOUR_CLIENT_ID.apps.googleusercontent.com">
+       
+		<style>
+			body {
+				text-align: center;
+			}
+            #mainMenu {
+				margin-top: 150px;
+			}
+            #color {
+                display: block;
+                margin: 10px auto;
+            }
+            .g-signin2 {
+                display: inline-block;
+            }
+            #start {
+                display: none;
+            }
+			#game {
+				display: none;
+				border: 1px solid #333;
+            }
+            #playerList {
+                list-style: none;
+                padding-left: 0;
+            }
+            #playerList li {
+                display: inline-block;
+                margin: 5px;   
+            }
+            #playerList img {
+                margin-right: 10px;
+                width: 30px;
+                border-radius: 100%;
+            }
+		</style>
+		<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.5/css/bootstrap.min.css">
+		<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.5/css/bootstrap-theme.min.css">
+        
+        <!-- Import for google OAuth --> 
+        <script src="https://apis.google.com/js/platform.js" async defer></script>
+		
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js"></script>
+		<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.5/js/bootstrap.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.0.3/socket.io.js"></script>
+		<script>
+            var baddieImages = ["https://www.professorwergeles.com/cdn/pumpkin.jpg", "https://www.professorwergeles.com/cdn/witch.jpg", "https://www.professorwergeles.com/cdn/spider.jpg"];
+            var baddieImagesLoaded = {};
+            for (var i in baddieImages) {
+                var img = new Image();
+                img.src = baddieImages[i];
+                baddieImagesLoaded[baddieImages[i]] = img;
+            }
+            
+            
+            
+			$(function() {
+				// When the user clicks play...
+				$("#play").click(play);
+                
+                // Or when they hit the enter key...
+                $("#name").keyup(function(e) {
+                    if (e.keyCode == 13) {
+                        play();
+                    }
+                });
+			});
+            function play() {
+                // Fade out the main menu...
+                $("#mainMenu").fadeOut(function(){
+                    // Then, fade in the game
+                    $("#game").fadeIn();
+
+                    // And join the game
+                    joinGame(profile);
+                });
+            }
+			
+			function joinGame() {
+                // Flag for game on/off
+                var on = false;
+                
+                // Remember yourself
+                var player = {
+					name: $("#name").val(),
+					color: $("#color").val(),
+                    score: 0
+				};
+                // And add an array for the bad guys
+                var baddies = [];
+				
+                // Connect to server
+				var socket = io();
+				
+				// Tell the server that we have joined
+				socket.emit("join", player);
+                
+                // Assume we're not the host
+                var isHost = false;
+                // If we are the host...
+                socket.on("isHost", function() {
+                    // Remember that
+                    isHost = true;
+                    
+                    // And present a start button
+                    $("#start")
+                        .show()
+                        .click(function() {
+                            $(this).hide();
+                            setupGame();
+                        });
+                });
+                
+                // Get the current player list
+                socket.on("updatePlayers", function(players) {
+                    $("#scoreboard > ul").empty();
+                    
+                    var teamScore = 0;
+                    
+                    for (var i in players) {
+                        var player = players[i];
+                        teamScore += player.score;
+                        
+                        // Player image
+                        var img = $("<img>");
+                        img.attr("src", player.img);
+                        
+                        
+                        var li = $("<li>");
+                        li
+                            .html(player.name + ": " + player.score)
+                            .css("color", player.color)
+                            .prepend(img);
+                        
+                        $("#scoreboard > ul").append(li);
+                    }
+                    
+                    $("#teamScore").html("Team Score: " + teamScore);
+                });
+                
+                
+                function setupGame() {
+                    // If we're the host, we need to spawn the baddies
+                    for (var i = 0; i < 4; i++) {
+                        baddies.push(new Baddie());
+                    }
+                    
+                    
+                    // And some future waves
+                    setInterval(function() {
+                        // Every two seconds, there's a 1/3 chance at more baddies
+                        var dice = random(2);
+                        if (dice == 0 && on) {
+                            // Spawn 4 to 15 baddies
+                            for (var i = 0; i < range(4, 15); i++) {
+                                baddies.push(new Baddie());
+                            }
+                            
+                            // And let the server know
+                            socket.emit("updateBaddies", baddies);
+                        }
+                    }, 2000);
+                    
+                    
+                    // Then tell the server that everyone's starting
+                    socket.emit("setupGame", {
+                        health: 20,
+                        baddies: baddies
+                    });
+                }
+                socket.on("startGame", function(state) {
+                    // Flag game on
+                    on = true;
+                    
+                    // Set the fort health
+                    $("#health").html("Health: " + state.health);
+                    
+                    // Get baddies from server
+                    baddies = state.baddies;
+                    
+                    // Reference the canvas so we can draw on it
+                    var canvas = document.getElementById("game");
+				    var c = canvas.getContext("2d");
+                    
+                    // Start the game loop
+                    window.requestAnimationFrame(frame);
+                    
+                    function frame() {
+                        window.requestAnimationFrame(frame);
+                        
+                        if (isHost && on) { 
+                            update();
+                        }
+                        
+                        draw(canvas, c);
+                    }
+                });
+                
+                socket.on("updateBaddies", function(b) {
+                    baddies = b;
+                });
+                
+                function update() {
+                    for (var i in baddies) {
+                        baddies[i].x -= baddies[i].speed;
+                        
+                        // DID IT HIT THE FORT?
+                        if (baddies[i].x < 0) {
+                            socket.emit("damageBase");
+                            baddies.splice(i, 1);
+                            socket.emit("updateBaddies", baddies);
+                        }
+                        
+                    }
+                    socket.emit("updateBaddies", baddies);
+                }
+                
+                function draw(canvas, c) {
+                    // Clear the canvas
+                    canvas.width = canvas.width;
+                    
+                    // Draw the baddies
+                    for (var i in baddies) {
+                        var baddie = baddies[i];
+                        
+                        c.fillStyle = baddie.color;
+                        c.fillRect(baddie.x, baddie.y, baddie.width, baddie.height);
+                        c.drawImage(baddieImagesLoaded[baddie.sprite], baddie.x, baddie.y);
+                    }
+                }
+                
+				function range(lower, upper) {
+                    return random(upper) + lower;
+                }
+                function random(upper) {
+                    return Math.round(Math.random()*upper);
+                }
+                function getRandom(list) {
+                    return list[Math.floor(Math.random() * list.length)];
+                }
+                
+                function Baddie() {
+                    this.x = (function(){
+                        return $("#game").width() - range(10, 60);
+                    }());
+                    this.y = (function(){
+                        return range(0, $("#game").height() - 60);
+                    }());
+                    this.width = 50;
+                    this.height = 50;
+                    this.health = 3;
+                    this.speed = 1;
+                    this.sprite = getRandom(baddieImages);
+                    this.color = (function(){
+                        var colors = ["green", "blue", "cornflowerblue", "lightgreen", "pink", "purple", "coral", "brown", "tan"];
+                        return getRandom(colors);
+                    }());
+                }
+                
+                // If you click on the canvas...
+                $("#game").click(function(e) {
+                    
+                    // Check each of the baddies
+                    for (var i in baddies) {
+                        var baddie = baddies[i];
+                        if ((e.offsetX >= baddie.x && e.offsetX <= baddie.x + baddie.width) && (e.offsetY >= baddie.y && e.offsetY <= baddie.y + baddie.height)) {
+                            
+                            baddies[i].health -= 1;
+                            if (baddies[i].health == 2) {
+                                baddies[i].color = "orange";
+                            }
+                            else if (baddies[i].health == 1) {
+                                baddies[i].color = "red";
+                            }
+                            else if (baddies[i].health == 0) {
+                                baddies.splice(i, 1);
+                                socket.emit("score");
+                            }
+                            socket.emit("updateBaddies", baddies);
+                            //socket.emit("updateBaddiesHealth", baddies);
+                        }
+                    }
+                });
+                
+                socket.on("baseDamaged", function(health) {
+                    if (health == 0) {
+                        on = false;
+                        alert("We didn't make it :(");
+                    }
+                    $("#health").html("Health: " + health);
+                });
+                
+			};
+		</script>
+	</head>
+	<body>
+		<div id="mainMenu">
+			<h1>Web Socket Game</h1>
+			<input type="text" id="name" autocomplete="off" autofocus>
+			<input type="color" id="color">
+			<button type="button" id="play" class="btn btn-success">Play</button>
+		</div>
+        <button type="button" id="start" class="btn btn-primary">Start</button>
+        <div id="scoreboard">
+            <ul id="playerList"></ul>
+            <div id="teamScore"></div>
+            <div id="health"></div>
+        </div>
+		<canvas id="game" width="800" height="500"></canvas>
+	</body>
+</html>
